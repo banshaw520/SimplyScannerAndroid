@@ -1,3 +1,50 @@
 <resources>
     <string name="app_name">SimplyScannerAndroid</string>
+    
+    <!-- Main Screen -->
+    <string name="main_screen_title">Documents</string>
+    <string name="scan_button_description">Start scanning</string>
+    <string name="menu_button_description">Menu</string>
+    
+    <!-- Function Bar -->
+    <string name="search_description">Search documents</string>
+    <string name="import_description">Import from gallery</string>
+    <string name="new_folder_description">Create new folder</string>
+    <string name="sort_description">Sort documents</string>
+    <string name="view_mode_description">Change view mode</string>
+    <string name="select_description">Select documents</string>
+    
+    <!-- Empty State -->
+    <string name="empty_state_title">Add your first document!</string>
+    <string name="empty_state_message">Tap the scan button to get started</string>
+    <string name="empty_state_button">Start Scanning</string>
+    
+    <!-- Items -->
+    <string name="locked_item_description">Locked</string>
+    <string name="pages_count_single">1 page</string>
+    <string name="pages_count_multiple">%d pages</string>
+    
+    <!-- Permissions -->
+    <string name="permission_request_title">Permissions Required</string>
+    <string name="permission_request_message">SimpleScanner needs camera and storage permissions to scan and save documents.</string>
+    <string name="permission_request_grant">Grant Permissions</string>
+    
+    <string name="permission_rationale_title">Permission Explanation</string>
+    <string name="permission_rationale_grant">Grant Permissions</string>
+    
+    <string name="camera_permission_required">Camera Permission Required</string>
+    <string name="camera_permission_message">Camera access is needed to scan documents. Please grant permission to continue.</string>
+    <string name="camera_permission_grant">Grant Camera Permission</string>
+    
+    <string name="camera_permission_rationale_title">Camera Access Needed</string>
+    <string name="camera_permission_rationale_message">This app requires camera access to capture document images. This permission is essential for scanning functionality.</string>
+    
+    <string name="permission_denied_title">Permission Denied</string>
+    <string name="permission_denied_message">Some features may not work without the required permissions. You can grant permissions in Settings.</string>
+    
+    <!-- Common -->
+    <string name="error_loading">Failed to load items</string>
+    <string name="error_creating">Failed to create item</string>
+    <string name="error_deleting">Failed to delete item</string>
+    <string name="retry">Retry</string>
 </resources>

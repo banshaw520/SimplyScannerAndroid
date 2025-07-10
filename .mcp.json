@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "context7": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"@upstash/context7-mcp"
+			]
+		},
+		"task-master-ai": {
+			"command": "npx",
+			"args": ["-y", "--package=task-master-ai", "task-master-ai"],
+			"env": {
+				"ANTHROPIC_API_KEY":"sk-vj71pk8Dp7J8VSxurDR9eEJU98IQFcTv6XHn33iIia6nJRcC"
+			}
+		}
+  }
+}
