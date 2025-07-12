@@ -11,6 +11,7 @@ data class ScanItem(
     val uuid: String,
     val displayName: String,
     val bDir: Boolean, // true for folders, false for documents
+    val relativePath: String, // cumulative path representing nested location in file system
     val order: List<String> = emptyList(), // ordered list of page filenames
     val bLock: Boolean = false, // PIN lock status
     val createdDate: Long = System.currentTimeMillis(),

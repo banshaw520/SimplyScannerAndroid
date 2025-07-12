@@ -1,6 +1,7 @@
 package com.ccs.simplyscannerandroid.data.serialization
 
 import com.ccs.simplyscannerandroid.data.model.ScanItem
+import com.ccs.simplyscannerandroid.data.model.generateRelativePath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -162,6 +163,7 @@ object SerializationUtils {
             "uuid" to item.uuid,
             "displayName" to item.displayName,
             "isDirectory" to item.bDir,
+            "relativePath" to item.relativePath,
             "pages" to item.order,
             "isLocked" to item.bLock,
             "createdDate" to item.createdDate,
@@ -174,13 +176,15 @@ object SerializationUtils {
      * Convert from legacy format to ScanItem
      */
     fun fromLegacyFormat(legacyData: Map<String, Any?>): ScanItem {
+        val createdDate = legacyData["createdDate"] as? Long ?: System.currentTimeMillis()
         return ScanItem(
             uuid = legacyData["uuid"] as? String ?: UUID.randomUUID().toString(),
             displayName = legacyData["displayName"] as? String ?: "Untitled",
             bDir = legacyData["isDirectory"] as? Boolean ?: false,
+            relativePath = legacyData["relativePath"] as? String ?: generateRelativePath("./", createdDate),
             order = (legacyData["pages"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
             bLock = legacyData["isLocked"] as? Boolean ?: false,
-            createdDate = legacyData["createdDate"] as? Long ?: System.currentTimeMillis(),
+            createdDate = createdDate,
             updatedDate = legacyData["updatedDate"] as? Long ?: System.currentTimeMillis(),
             deletedDate = legacyData["deletedDate"] as? Long
         )

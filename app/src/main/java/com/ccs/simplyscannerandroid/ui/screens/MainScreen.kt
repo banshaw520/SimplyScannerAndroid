@@ -35,6 +35,8 @@ import com.ccs.simplyscannerandroid.ui.theme.*
 @Composable
 fun MainScreen(
     scanItems: List<ScanItem> = emptyList(),
+    isLoading: Boolean = false,
+    isImporting: Boolean = false,
     onScanButtonClick: () -> Unit = {},
     onItemClick: (ScanItem) -> Unit = {},
     onSearchClick: () -> Unit = {},
@@ -489,12 +491,14 @@ private fun MainScreenWithItemsPreview() {
                     uuid = "1",
                     displayName = "Document 1",
                     bDir = false,
+                    relativePath = "./2025-01-01_12_00_00.000/",
                     order = listOf("page1.jpg", "page2.jpg")
                 ),
                 ScanItem(
                     uuid = "2",
                     displayName = "Important Folder",
                     bDir = true,
+                    relativePath = "./2025-01-01_13_00_00.000/",
                     bLock = true
                 )
             ),

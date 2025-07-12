@@ -1,7 +1,10 @@
 package com.ccs.simplyscannerandroid.data.service
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.LruCache
 import com.ccs.simplyscannerandroid.data.model.ScanItem
 import com.ccs.simplyscannerandroid.data.model.SortOption
 import com.ccs.simplyscannerandroid.data.model.createDocument
@@ -14,16 +17,233 @@ import com.ccs.simplyscannerandroid.data.storage.FileSystemStorage
 import com.ccs.simplyscannerandroid.data.storage.StorageStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
  * High-level service for managing scanned documents and folders
- * This service provides a clean API for the rest of the application
+ * Enhanced with iOS-compatible image handling and thumbnail generation
  */
-class ScanService(context: Context) {
+class ScanService(private val context: Context) {
+    
+    companion object {
+        const val DESC_FILE_NAME = "desc.json" // iOS uses desc.ini, Android uses desc.json
+        const val THUMB_SIZE = 200 // 200dp thumbnail size (following iOS pattern)
+        const val THUMB_PREFIX = "thumb_" // Following iOS naming convention
+        const val IMAGE_EXTENSION = ".jpg" // Using JPEG for better compression
+    }
     
     private val storage = FileSystemStorage(context)
     private val fileOperations = FileOperations(context)
+    
+    // Image cache with 50MB memory limit (following iOS pattern)
+    private val imageCache = object : LruCache<String, Bitmap>(50 * 1024 * 1024) {
+        override fun sizeOf(key: String, bitmap: Bitmap): Int {
+            return bitmap.byteCount
+        }
+    }
+    
+    private val json = Json { 
+        prettyPrint = true
+        ignoreUnknownKeys = true
+    }
+    
+    // Date formatter following iOS pattern: yyyy-MM-dd_HH_mm_ss.SSS
+    private val directoryDateFormatter = SimpleDateFormat("yyyy-MM-dd_HH_mm_ss.SSS", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    
+    /**
+     * Creates a new document from imported images (following iOS createScan pattern)
+     */
+    suspend fun createDocumentFromImages(
+        displayName: String,
+        images: List<File>
+    ): Result<ScanItem> = withContext(Dispatchers.IO) {
+        try {
+            // Create document using existing pattern
+            val documentResult = createDocument(displayName)
+            documentResult.fold(
+                onSuccess = { document ->
+                    // Process and add images
+                    val imageFilenames = mutableListOf<String>()
+                    images.forEachIndexed { index, imageFile ->
+                        val timestamp = directoryDateFormatter.format(Date(document.createdDate))
+                        val imageFilename = "$timestamp-$index$IMAGE_EXTENSION"
+                        
+                        // Get document directory using new date-based naming
+                        val documentDir = storage.getItemDirectory(document)
+                        val targetFile = File(documentDir, imageFilename)
+                        
+                        // Process and save image
+                        val bitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
+                        if (bitmap != null) {
+                            // Save original image with JPEG compression
+                            FileOutputStream(targetFile).use { out ->
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                            }
+                            
+                            // Generate and save thumbnail (following iOS pattern)
+                            generateThumbnail(bitmap, File(documentDir, "$THUMB_PREFIX$imageFilename"))
+                            
+                            imageFilenames.add(imageFilename)
+                            
+                            // Cache original image
+                            val cacheKey = "${document.uuid}-$imageFilename"
+                            imageCache.put(cacheKey, bitmap)
+                        }
+                    }
+                    
+                    // Update document with image order
+                    val finalDocument = document.copy(order = imageFilenames)
+                    storage.saveItemMetadata(finalDocument)
+                    
+                    Result.success(finalDocument)
+                },
+                onFailure = { Result.failure(it) }
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Generates thumbnail following iOS pattern (scaleAspectFill with center crop)
+     */
+    private fun generateThumbnail(originalBitmap: Bitmap, thumbnailFile: File) {
+        try {
+            val density = context.resources.displayMetrics.density
+            val thumbSizePx = (THUMB_SIZE * density).toInt()
+            
+            // Calculate scale to fill thumbnail size (scaleAspectFill equivalent)
+            val scale = maxOf(
+                thumbSizePx.toFloat() / originalBitmap.width,
+                thumbSizePx.toFloat() / originalBitmap.height
+            )
+            
+            val scaledWidth = (originalBitmap.width * scale).toInt()
+            val scaledHeight = (originalBitmap.height * scale).toInt()
+            
+            // Scale bitmap
+            val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, scaledWidth, scaledHeight, true)
+            
+            // Crop to center (scaleAspectFill)
+            val x = maxOf(0, (scaledWidth - thumbSizePx) / 2)
+            val y = maxOf(0, (scaledHeight - thumbSizePx) / 2)
+            val width = minOf(thumbSizePx, scaledWidth)
+            val height = minOf(thumbSizePx, scaledHeight)
+            
+            val thumbnail = Bitmap.createBitmap(scaledBitmap, x, y, width, height)
+            
+            // Ensure parent directory exists
+            thumbnailFile.parentFile?.mkdirs()
+            
+            // Save thumbnail
+            FileOutputStream(thumbnailFile).use { out ->
+                thumbnail.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            
+            // Clean up
+            if (scaledBitmap != originalBitmap) scaledBitmap.recycle()
+            thumbnail.recycle()
+        } catch (e: Exception) {
+            // Log error but don't fail the operation
+        }
+    }
+    
+    /**
+     * Gets original image for a scan item page (following iOS getImage pattern)
+     */
+    suspend fun getImage(item: ScanItem, pageIndex: Int): Result<Bitmap> = withContext(Dispatchers.IO) {
+        try {
+            if (pageIndex >= item.order.size) {
+                return@withContext Result.failure(IndexOutOfBoundsException("Page index out of range"))
+            }
+            
+            val filename = item.order[pageIndex]
+            val cacheKey = "${item.uuid}-$filename"
+            
+            // Check cache first (following iOS caching pattern)
+            imageCache.get(cacheKey)?.let { cachedBitmap ->
+                return@withContext Result.success(cachedBitmap)
+            }
+            
+            // Load from file
+            val imageFile = storage.getPageFile(item, filename)
+            if (imageFile.exists()) {
+                val bitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
+                if (bitmap != null) {
+                    imageCache.put(cacheKey, bitmap)
+                    Result.success(bitmap)
+                } else {
+                    Result.failure(Exception("Failed to decode image"))
+                }
+            } else {
+                Result.failure(Exception("Image file not found"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Gets thumbnail image for a scan item page (following iOS getThumbImage pattern)
+     */
+    suspend fun getThumbnail(item: ScanItem, pageIndex: Int): Result<Bitmap> = withContext(Dispatchers.IO) {
+        try {
+            if (pageIndex >= item.order.size) {
+                return@withContext Result.failure(IndexOutOfBoundsException("Page index out of range"))
+            }
+            
+            val filename = item.order[pageIndex]
+            val thumbFilename = "$THUMB_PREFIX$filename"
+            val thumbCacheKey = "${item.uuid}-$thumbFilename"
+            
+            // Check cache first
+            imageCache.get(thumbCacheKey)?.let { cachedThumb ->
+                return@withContext Result.success(cachedThumb)
+            }
+            
+            // Check if thumbnail file exists
+            val thumbFile = storage.getPageFile(item, thumbFilename)
+            if (thumbFile.exists()) {
+                val thumbnail = BitmapFactory.decodeFile(thumbFile.absolutePath)
+                if (thumbnail != null) {
+                    imageCache.put(thumbCacheKey, thumbnail)
+                    return@withContext Result.success(thumbnail)
+                }
+            }
+            
+            // Generate thumbnail from original image if not found (lazy generation like iOS)
+            getImage(item, pageIndex).fold(
+                onSuccess = { originalBitmap ->
+                    generateThumbnail(originalBitmap, thumbFile)
+                    val thumbnail = BitmapFactory.decodeFile(thumbFile.absolutePath)
+                    if (thumbnail != null) {
+                        imageCache.put(thumbCacheKey, thumbnail)
+                        Result.success(thumbnail)
+                    } else {
+                        Result.failure(Exception("Failed to generate thumbnail"))
+                    }
+                },
+                onFailure = { Result.failure(it) }
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    /**
+     * Clears image cache (following iOS pattern)
+     */
+    fun clearImageCache() {
+        imageCache.evictAll()
+    }
     
     /**
      * Create a new document
@@ -87,6 +307,17 @@ class ScanService(context: Context) {
             )
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+    
+    /**
+     * Get item size in bytes
+     */
+    private fun getItemSize(uuid: String): Long {
+        return try {
+            storage.getItemDirectorySize(uuid)
+        } catch (e: Exception) {
+            0L
         }
     }
     
@@ -383,17 +614,6 @@ class ScanService(context: Context) {
     }
     
     /**
-     * Get item size in bytes
-     */
-    private fun getItemSize(uuid: String): Long {
-        return try {
-            storage.getItemDirectorySize(uuid)
-        } catch (e: Exception) {
-            0L
-        }
-    }
-    
-    /**
      * Validate item integrity
      */
     suspend fun validateItemIntegrity(uuid: String): Result<ValidationResult> = withContext(Dispatchers.IO) {
@@ -404,7 +624,7 @@ class ScanService(context: Context) {
             if (item.isDocument) {
                 // Check if all page files exist
                 item.order.forEach { pageFilename ->
-                    val pageFile = storage.getPageFile(uuid, pageFilename)
+                    val pageFile = storage.getPageFile(item, pageFilename)
                     if (!pageFile.exists()) {
                         issues.add("Missing page file: $pageFilename")
                     }

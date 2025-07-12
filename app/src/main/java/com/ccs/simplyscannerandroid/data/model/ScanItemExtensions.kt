@@ -1,45 +1,82 @@
 package com.ccs.simplyscannerandroid.data.model
 
+import java.text.SimpleDateFormat
 import java.util.UUID
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import kotlin.random.Random
 
 /**
  * Extension functions and utilities for ScanItem data model
  */
 
+// Date formatter for directory names following iOS pattern: yyyy-MM-dd_HH_mm_ss.SSS
+private val directoryDateFormatter = SimpleDateFormat("yyyy-MM-dd_HH_mm_ss.SSS", Locale.US).apply {
+    timeZone = TimeZone.getTimeZone("UTC")
+}
+
+/**
+ * Generate directory name from created date
+ */
+fun generateDirectoryName(createdDate: Long): String {
+    return directoryDateFormatter.format(Date(createdDate))
+}
+
+/**
+ * Generate relativePath according to FR-4.2 requirements
+ * @param parentRelativePath The parent folder's relativePath (or "./" for root)
+ * @param createdDate The creation date for this item
+ */
+fun generateRelativePath(parentRelativePath: String = "./", createdDate: Long): String {
+    val directoryName = generateDirectoryName(createdDate)
+    return "$parentRelativePath$directoryName/"
+}
+
 /**
  * Creates a new document ScanItem with default values
+ * @param displayName The display name for the document
+ * @param pages List of page filenames
+ * @param parentRelativePath The parent folder's relativePath (default: root)
  */
 fun createDocument(
     displayName: String,
-    pages: List<String> = emptyList()
+    pages: List<String> = emptyList(),
+    parentRelativePath: String = "./"
 ): ScanItem {
+    val createdDate = System.currentTimeMillis()
     return ScanItem(
         uuid = UUID.randomUUID().toString(),
         displayName = displayName,
         bDir = false,
+        relativePath = generateRelativePath(parentRelativePath, createdDate),
         order = pages,
         bLock = false,
-        createdDate = System.currentTimeMillis(),
-        updatedDate = System.currentTimeMillis(),
+        createdDate = createdDate,
+        updatedDate = createdDate,
         deletedDate = null
     )
 }
 
 /**
  * Creates a new folder ScanItem with default values
+ * @param displayName The display name for the folder
+ * @param parentRelativePath The parent folder's relativePath (default: root)
  */
 fun createFolder(
-    displayName: String
+    displayName: String,
+    parentRelativePath: String = "./"
 ): ScanItem {
+    val createdDate = System.currentTimeMillis()
     return ScanItem(
         uuid = UUID.randomUUID().toString(),
         displayName = displayName,
         bDir = true,
+        relativePath = generateRelativePath(parentRelativePath, createdDate),
         order = emptyList(),
         bLock = false,
-        createdDate = System.currentTimeMillis(),
-        updatedDate = System.currentTimeMillis(),
+        createdDate = createdDate,
+        updatedDate = createdDate,
         deletedDate = null
     )
 }
@@ -150,7 +187,8 @@ fun ScanItem.toggleLock(): ScanItem {
 fun createSampleDocument(): ScanItem {
     return createDocument(
         displayName = "Sample Document ${Random.nextInt(1000)}",
-        pages = listOf("page_1.jpg", "page_2.jpg", "page_3.jpg")
+        pages = listOf("page_1.jpg", "page_2.jpg", "page_3.jpg"),
+        parentRelativePath = "./"
     )
 }
 
@@ -159,6 +197,7 @@ fun createSampleDocument(): ScanItem {
  */
 fun createSampleFolder(): ScanItem {
     return createFolder(
-        displayName = "Sample Folder ${Random.nextInt(1000)}"
+        displayName = "Sample Folder ${Random.nextInt(1000)}",
+        parentRelativePath = "./"
     )
 }

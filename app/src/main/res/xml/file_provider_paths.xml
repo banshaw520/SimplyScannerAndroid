@@ -14,4 +14,14 @@
     <external-files-path
         name="backup"
         path="SimplyScannerPro/backup/" />
+    
+    <!-- Cache directory for gallery imports -->
+    <cache-path
+        name="gallery_imports"
+        path="gallery_imports/" />
+    
+    <!-- Cache directory for image processing -->
+    <cache-path
+        name="processing"
+        path="processing/" />
 </paths>

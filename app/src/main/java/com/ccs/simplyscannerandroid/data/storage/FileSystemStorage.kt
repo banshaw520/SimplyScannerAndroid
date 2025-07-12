@@ -1,15 +1,22 @@
 package com.ccs.simplyscannerandroid.data.storage
 
 import android.content.Context
+import android.os.Environment
 import com.ccs.simplyscannerandroid.data.model.ScanItem
 import com.ccs.simplyscannerandroid.data.serialization.JsonManager
 import com.ccs.simplyscannerandroid.data.serialization.ValidationResult
 import java.io.File
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
  * File system storage manager for ScanItem documents
  * Implements iOS-compatible directory structure with desc.json metadata files
+ * 
+ * Storage Strategy:
+ * - Development/Debug: Public Documents directory (accessible for testing)
+ * - Production/Release: Secure internal app storage
  */
 class FileSystemStorage(private val context: Context) {
     
@@ -20,13 +27,70 @@ class FileSystemStorage(private val context: Context) {
         private const val BACKUP_DIR_NAME = "backup"
     }
     
+    // Date formatter for directory names following iOS pattern: yyyy-MM-dd_HH_mm_ss.SSS
+    private val directoryDateFormatter = SimpleDateFormat("yyyy-MM-dd_HH_mm_ss.SSS", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    
     /**
-     * Get the root storage directory
+     * Get the root storage directory based on build configuration
      */
     private fun getStorageRoot(): File {
-        return File(context.getExternalFilesDir(null), STORAGE_DIR_NAME).apply {
+        return if (isDebugBuild()) {
+            // Development: Use public Documents directory for easy access
+            getPublicDocumentsDirectory()
+        } else {
+            // Production: Use secure internal storage
+            getSecureInternalDirectory()
+        }
+    }
+    
+    /**
+     * Check if running in debug mode
+     */
+    private fun isDebugBuild(): Boolean {
+        return try {
+            // Use ApplicationInfo flags to detect debug build
+            val appInfo = context.applicationInfo
+            (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        } catch (e: Exception) {
+            false // Default to production mode if detection fails
+        }
+    }
+    
+    /**
+     * Get public Documents directory for development
+     * Path: /storage/emulated/0/Documents/SimplyScannerPro/
+     */
+    private fun getPublicDocumentsDirectory(): File {
+        val documentsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        return File(documentsDir, STORAGE_DIR_NAME).apply {
             if (!exists()) mkdirs()
         }
+    }
+    
+    /**
+     * Get secure internal storage for production
+     * Path: /data/data/com.ccs.simplyscannerandroid/files/SimplyScannerPro/
+     */
+    private fun getSecureInternalDirectory(): File {
+        return File(context.filesDir, STORAGE_DIR_NAME).apply {
+            if (!exists()) mkdirs()
+        }
+    }
+    
+    /**
+     * Get current storage location info for debugging
+     */
+    fun getStorageInfo(): StorageInfo {
+        val root = getStorageRoot()
+        return StorageInfo(
+            isPublicStorage = isDebugBuild(),
+            rootPath = root.absolutePath,
+            isAccessible = root.exists() && root.canWrite(),
+            totalSpace = root.totalSpace,
+            freeSpace = root.freeSpace
+        )
     }
     
     /**
@@ -48,31 +112,46 @@ class FileSystemStorage(private val context: Context) {
     }
     
     /**
-     * Get the directory for a specific document/folder
+     * Get the directory for a specific document/folder using formatted date name
      */
-    fun getItemDirectory(uuid: String): File {
-        return File(getStorageRoot(), uuid)
+    fun getItemDirectory(item: ScanItem): File {
+        val directoryName = directoryDateFormatter.format(Date(item.createdDate))
+        return File(getStorageRoot(), directoryName)
     }
     
     /**
      * Get the desc.json file for a specific item
      */
-    fun getDescFile(uuid: String): File {
-        return File(getItemDirectory(uuid), DESC_FILE_NAME)
+    fun getDescFile(item: ScanItem): File {
+        return File(getItemDirectory(item), DESC_FILE_NAME)
     }
     
     /**
      * Get the page file for a specific document
      */
-    fun getPageFile(uuid: String, pageFilename: String): File {
-        return File(getItemDirectory(uuid), pageFilename)
+    fun getPageFile(item: ScanItem, pageFilename: String): File {
+        return File(getItemDirectory(item), pageFilename)
     }
     
     /**
-     * Create directory structure for a new item
+     * Get the page file for a specific document using UUID (for FileOperations compatibility)
      */
-    fun createItemDirectory(uuid: String): File {
-        val itemDir = getItemDirectory(uuid)
+    fun getPageFile(uuid: String, pageFilename: String): File {
+        // For FileOperations compatibility, we need to find the item by UUID first
+        return try {
+            val item = loadItemMetadata(uuid)
+            getPageFile(item, pageFilename)
+        } catch (e: Exception) {
+            // Fallback: this shouldn't happen in the optimized version, but kept for safety
+            throw IOException("Could not find item with UUID: $uuid")
+        }
+    }
+    
+    /**
+     * Create directory structure for a new item using date-based naming
+     */
+    fun createItemDirectory(item: ScanItem): File {
+        val itemDir = getItemDirectory(item)
         if (!itemDir.exists()) {
             itemDir.mkdirs()
         }
@@ -80,11 +159,11 @@ class FileSystemStorage(private val context: Context) {
     }
     
     /**
-     * Save ScanItem metadata to desc.json
+     * Save ScanItem metadata to desc.json using date-based directory naming
      */
     @Throws(IOException::class)
     fun saveItemMetadata(item: ScanItem) {
-        val itemDir = createItemDirectory(item.uuid)
+        val itemDir = createItemDirectory(item)
         val descFile = File(itemDir, DESC_FILE_NAME)
         
         try {
@@ -99,12 +178,27 @@ class FileSystemStorage(private val context: Context) {
      */
     @Throws(IOException::class)
     fun loadItemMetadata(uuid: String): ScanItem {
-        val descFile = getDescFile(uuid)
+        // Search all date-based directories to find the item with matching UUID
+        val storageRoot = getStorageRoot()
+        val foundDir = storageRoot.listFiles()?.find { dir ->
+            if (dir.isDirectory && dir.name != TEMP_DIR_NAME && dir.name != BACKUP_DIR_NAME) {
+                val descFile = File(dir, DESC_FILE_NAME)
+                if (descFile.exists()) {
+                    try {
+                        val item = JsonManager.loadScanItemFromFile(descFile)
+                        item.uuid == uuid
+                    } catch (e: Exception) {
+                        false
+                    }
+                } else false
+            } else false
+        }
         
-        if (!descFile.exists()) {
+        if (foundDir == null) {
             throw IOException("Metadata file not found for item: $uuid")
         }
         
+        val descFile = File(foundDir, DESC_FILE_NAME)
         try {
             return JsonManager.loadScanItemFromFile(descFile)
         } catch (e: Exception) {
@@ -115,67 +209,99 @@ class FileSystemStorage(private val context: Context) {
     /**
      * Validate item metadata file
      */
-    fun validateItemMetadata(uuid: String): ValidationResult {
-        val descFile = getDescFile(uuid)
+    fun validateItemMetadata(item: ScanItem): ValidationResult {
+        val descFile = getDescFile(item)
         return JsonManager.validateJsonFile(descFile)
     }
     
     /**
      * Delete item directory and all its contents
      */
-    fun deleteItemDirectory(uuid: String): Boolean {
-        val itemDir = getItemDirectory(uuid)
+    fun deleteItemDirectory(item: ScanItem): Boolean {
+        val itemDir = getItemDirectory(item)
         return itemDir.deleteRecursively()
     }
     
     /**
-     * List all item directories (UUIDs)
+     * Delete item directory by UUID (searches date-based directories)
+     */
+    fun deleteItemDirectory(uuid: String): Boolean {
+        return try {
+            val item = loadItemMetadata(uuid)
+            deleteItemDirectory(item)
+        } catch (e: Exception) {
+            false
+        }
+    }
+    
+    /**
+     * List all item UUIDs from date-based directories
      */
     fun listItemDirectories(): List<String> {
         val storageRoot = getStorageRoot()
-        return storageRoot.listFiles()?.filter { 
-            it.isDirectory && 
-            it.name != TEMP_DIR_NAME && 
-            it.name != BACKUP_DIR_NAME &&
-            File(it, DESC_FILE_NAME).exists()
-        }?.map { it.name } ?: emptyList()
+        return storageRoot.listFiles()?.mapNotNull { dir ->
+            if (dir.isDirectory && 
+                dir.name != TEMP_DIR_NAME && 
+                dir.name != BACKUP_DIR_NAME &&
+                File(dir, DESC_FILE_NAME).exists()) {
+                try {
+                    val descFile = File(dir, DESC_FILE_NAME)
+                    val item = JsonManager.loadScanItemFromFile(descFile)
+                    item.uuid
+                } catch (e: Exception) {
+                    null
+                }
+            } else null
+        } ?: emptyList()
     }
     
     /**
      * Check if item directory exists
      */
-    fun itemDirectoryExists(uuid: String): Boolean {
-        return getItemDirectory(uuid).exists()
+    fun itemDirectoryExists(item: ScanItem): Boolean {
+        return getItemDirectory(item).exists()
     }
     
     /**
      * Check if desc.json exists for item
      */
-    fun itemMetadataExists(uuid: String): Boolean {
-        return getDescFile(uuid).exists()
+    fun itemMetadataExists(item: ScanItem): Boolean {
+        return getDescFile(item).exists()
     }
     
     /**
      * Get the size of an item directory in bytes
      */
-    fun getItemDirectorySize(uuid: String): Long {
-        val itemDir = getItemDirectory(uuid)
+    fun getItemDirectorySize(item: ScanItem): Long {
+        val itemDir = getItemDirectory(item)
         return if (itemDir.exists()) {
             itemDir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
         } else 0L
     }
     
     /**
+     * Get the size of an item directory in bytes by UUID
+     */
+    fun getItemDirectorySize(uuid: String): Long {
+        return try {
+            val item = loadItemMetadata(uuid)
+            getItemDirectorySize(item)
+        } catch (e: Exception) {
+            0L
+        }
+    }
+    
+    /**
      * Create a backup of item directory
      */
     @Throws(IOException::class)
-    fun backupItemDirectory(uuid: String): File {
-        val itemDir = getItemDirectory(uuid)
+    fun backupItemDirectory(item: ScanItem): File {
+        val itemDir = getItemDirectory(item)
         val backupDir = getBackupDirectory()
-        val backupFile = File(backupDir, "${uuid}_${System.currentTimeMillis()}.backup")
+        val backupFile = File(backupDir, "${item.uuid}_${System.currentTimeMillis()}.backup")
         
         if (!itemDir.exists()) {
-            throw IOException("Item directory not found: $uuid")
+            throw IOException("Item directory not found: ${item.uuid}")
         }
         
         try {
@@ -187,15 +313,24 @@ class FileSystemStorage(private val context: Context) {
     }
     
     /**
+     * Create a backup of item directory by UUID
+     */
+    @Throws(IOException::class)
+    fun backupItemDirectory(uuid: String): File {
+        val item = loadItemMetadata(uuid)
+        return backupItemDirectory(item)
+    }
+    
+    /**
      * Restore item directory from backup
      */
     @Throws(IOException::class)
-    fun restoreItemDirectory(uuid: String, backupFile: File) {
+    fun restoreItemDirectory(item: ScanItem, backupFile: File) {
         if (!backupFile.exists()) {
             throw IOException("Backup file not found: ${backupFile.absolutePath}")
         }
         
-        val itemDir = getItemDirectory(uuid)
+        val itemDir = getItemDirectory(item)
         
         try {
             // Delete existing directory if it exists
@@ -245,6 +380,17 @@ class FileSystemStorage(private val context: Context) {
         )
     }
 }
+
+/**
+ * Storage information data class
+ */
+data class StorageInfo(
+    val isPublicStorage: Boolean,
+    val rootPath: String,
+    val isAccessible: Boolean,
+    val totalSpace: Long,
+    val freeSpace: Long
+)
 
 /**
  * Storage statistics data class
